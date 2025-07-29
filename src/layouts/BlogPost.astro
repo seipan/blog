@@ -1,0 +1,95 @@
+---
+import '../styles/global.css';
+
+export interface Props {
+  title: string;
+  description?: string;
+  pubDate?: Date;
+  updatedDate?: Date;
+  heroImage?: string;
+}
+
+const {
+  title,
+  description,
+  pubDate,
+  updatedDate,
+  heroImage,
+} = Astro.props;
+---
+
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="description" content={description} />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="generator" content={Astro.generator} />
+    <title>{title}</title>
+  </head>
+  <body>
+    <main>
+      <article>
+        {heroImage && <img width={1020} height={510} src={heroImage} alt="" />}
+        <h1>{title}</h1>
+        {pubDate && <time>{pubDate.toLocaleDateString('ja-JP')}</time>}
+        {
+          updatedDate && (
+            <div>
+              最終更新日: <time>{updatedDate.toLocaleDateString('ja-JP')}</time>
+            </div>
+          )
+        }
+        <hr />
+        <slot />
+      </article>
+    </main>
+  </body>
+</html>
+
+<style>
+  body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+  }
+  main {
+    margin: auto;
+    padding: 2em 1em;
+    max-width: 90vw;
+    width: 100%;
+    min-height: 90vh;
+    display: flex;
+    align-items: center;
+  }
+  article {
+    padding: 5em;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.05);
+    backdrop-filter: blur(10px);
+    min-height: 80vh;
+    width: 100%;
+  }
+  h1 {
+    font-size: 2.5em;
+    margin: 0.5em 0;
+    color: var(--color-text);
+    font-weight: 300;
+  }
+  time {
+    color: var(--color-text-secondary);
+    font-size: 0.9em;
+  }
+  hr {
+    border: 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.2);
+    margin: 2em 0;
+  }
+  img {
+    border-radius: 8px;
+    margin-bottom: 1.5em;
+    opacity: 0.9;
+  }
+</style>
