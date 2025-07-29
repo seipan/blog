@@ -43,7 +43,7 @@ posts.sort((a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf());
   }
   main {
     padding: 2em;
-    max-width: 400px;
+    max-width: min(90vw, 600px);
   }
   section {
     text-align: right;
@@ -57,13 +57,13 @@ posts.sort((a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf());
   }
   time {
     color: var(--color-text-secondary);
-    font-size: 0.85em;
+    font-size: clamp(0.75rem, 1.5vw, 1rem);
     display: block;
   }
   a {
     color: var(--color-text);
     text-decoration: none;
-    font-size: 2.5em;
+    font-size: clamp(1.5rem, 4vw, 3rem);
     font-weight: 500;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', 'Yu Gothic UI', 'Meiryo', sans-serif;
     transition: opacity 0.2s ease;
