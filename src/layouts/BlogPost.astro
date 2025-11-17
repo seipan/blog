@@ -30,18 +30,22 @@ const {
   <body>
     <main>
       <article>
+        <header>
+          <a href="/" class="back-link">← blog.yadon3141.com</a>
+          <h1>{title}</h1>
+          {pubDate && <time>{pubDate.toLocaleDateString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '-')}</time>}
+          {
+            updatedDate && (
+              <div class="updated">
+                最終更新日: <time>{updatedDate.toLocaleDateString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '-')}</time>
+              </div>
+            )
+          }
+        </header>
         {heroImage && <img width={1020} height={510} src={heroImage} alt="" />}
-        <h1>{title}</h1>
-        {pubDate && <time>{pubDate.toLocaleDateString('ja-JP')}</time>}
-        {
-          updatedDate && (
-            <div>
-              最終更新日: <time>{updatedDate.toLocaleDateString('ja-JP')}</time>
-            </div>
-          )
-        }
-        <hr />
-        <slot />
+        <div class="content">
+          <slot />
+        </div>
       </article>
     </main>
   </body>
@@ -49,47 +53,115 @@ const {
 
 <style>
   body {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    min-height: 100vh;
+    background-color: #fff;
+    color: #333;
   }
+  
   main {
-    margin: auto;
-    padding: 2em 1em;
-    max-width: 90vw;
-    width: 100%;
-    min-height: 90vh;
-    display: flex;
-    align-items: center;
+    max-width: 680px;
+    margin: 0 auto;
+    padding: 60px 20px;
   }
+  
   article {
-    padding: 5em;
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    border-radius: 12px;
-    background: rgba(255, 255, 255, 0.05);
-    backdrop-filter: blur(10px);
-    min-height: 80vh;
     width: 100%;
   }
+  
+  header {
+    margin-bottom: 40px;
+  }
+  
+  .back-link {
+    color: #666;
+    text-decoration: none;
+    font-size: 14px;
+    display: inline-block;
+    margin-bottom: 20px;
+  }
+  
+  .back-link:hover {
+    color: #333;
+  }
+  
   h1 {
-    font-size: 2.5em;
-    margin: 0.5em 0;
-    color: var(--color-text);
-    font-weight: 300;
+    font-size: 28px;
+    font-weight: 600;
+    margin: 0 0 12px 0;
+    color: #333;
+    line-height: 1.3;
   }
+  
   time {
-    color: var(--color-text-secondary);
-    font-size: 0.9em;
+    color: #999;
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
   }
-  hr {
-    border: 0;
-    border-top: 1px solid rgba(255, 255, 255, 0.2);
-    margin: 2em 0;
+  
+  .updated {
+    margin-top: 8px;
+    font-size: 13px;
+    color: #999;
   }
+  
   img {
-    border-radius: 8px;
-    margin-bottom: 1.5em;
-    opacity: 0.9;
+    max-width: 100%;
+    height: auto;
+    border-radius: 4px;
+    margin: 30px 0;
+  }
+  
+  .content {
+    font-size: 16px;
+    line-height: 1.8;
+  }
+  
+  /* Content typography */
+  .content h2 {
+    margin-top: 40px;
+    margin-bottom: 16px;
+  }
+  
+  .content h3 {
+    margin-top: 32px;
+    margin-bottom: 12px;
+  }
+  
+  .content p {
+    margin-bottom: 20px;
+  }
+  
+  .content ul, .content ol {
+    margin-bottom: 20px;
+  }
+  
+  .content li {
+    margin-bottom: 8px;
+  }
+  
+  .content blockquote {
+    margin: 20px 0;
+  }
+  
+  .content pre {
+    margin: 20px 0;
+  }
+  
+  .content hr {
+    margin: 40px 0;
+  }
+  
+  /* Responsive */
+  @media (max-width: 600px) {
+    main {
+      padding: 40px 16px;
+    }
+    
+    h1 {
+      font-size: 24px;
+    }
+    
+    .content {
+      font-size: 15px;
+    }
   }
 </style>

@@ -4,6 +4,14 @@ import '../styles/global.css';
 
 const posts = await getCollection('blog');
 posts.sort((a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf());
+
+// 日付フォーマット
+const formatDate = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}/${month}/${day}`;
+};
 ---
 
 <html lang="ja">
@@ -12,63 +20,118 @@ posts.sort((a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf());
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width" />
     <meta name="generator" content={Astro.generator} />
-    <title>My Blog</title>
+    <title>blog.yadon3141.com</title>
   </head>
   <body>
-    <main>
-      <section>
-        <ul>
+    <div class="container">
+      <header>
+        <h1>blog.yadon3141.com</h1>
+      </header>
+      
+      <main>
+        <ul class="posts">
           {
             posts.map((post) => (
               <li>
-                <time datetime={post.data.pubDate.toISOString()}>
-                  {post.data.pubDate.toLocaleDateString('ja-JP')}
-                </time>
+                <span class="date">{formatDate(post.data.pubDate)}</span>
                 <a href={`/blog/${post.slug}/`}>{post.data.title}</a>
               </li>
             ))
           }
         </ul>
-      </section>
-    </main>
+      </main>
+    </div>
   </body>
 </html>
 
 <style>
-  body {
-    display: flex;
-    justify-content: flex-end;
-    align-items: flex-end;
-    min-height: 100vh;
-  }
-  main {
-    padding: 2em;
-    max-width: min(90vw, 600px);
-  }
-  section {
-    text-align: right;
-  }
-  ul {
-    list-style: none;
+  /* Reset */
+  * {
+    margin: 0;
     padding: 0;
+    box-sizing: border-box;
   }
-  li {
-    margin-bottom: 1em;
-  }
-  time {
-    color: var(--color-text-secondary);
-    font-size: clamp(0.75rem, 1.5vw, 1rem);
-    display: block;
-  }
-  a {
-    color: var(--color-text);
-    text-decoration: none;
-    font-size: clamp(1.5rem, 4vw, 3rem);
-    font-weight: 500;
+
+  /* Base */
+  body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', 'Yu Gothic UI', 'Meiryo', sans-serif;
-    transition: opacity 0.2s ease;
+    font-size: 18px;
+    line-height: 1.7;
+    color: #333;
+    background-color: #fff;
   }
-  a:hover {
-    opacity: 0.7;
+
+  /* Container */
+  .container {
+    max-width: 700px;
+    margin: 0 auto;
+    padding: 60px 20px;
+  }
+
+  /* Header */
+  header {
+    text-align: center;
+    margin-bottom: 60px;
+  }
+
+  header h1 {
+    font-size: 26px;
+    font-weight: normal;
+    color: #333;
+  }
+
+  /* Posts list */
+  .posts {
+    list-style: none;
+  }
+
+  .posts li {
+    margin-bottom: 8px;
+    display: flex;
+    align-items: baseline;
+    gap: 20px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #f0f0f0;
+  }
+
+  /* Date */
+  .date {
+    color: #999;
+    font-size: 18px;
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
+  }
+
+  /* Links */
+  .posts a {
+    color: #1e90ff;
+    text-decoration: none;
+    font-size: 18px;
+    line-height: 1.5;
+  }
+
+  .posts a:hover {
+    text-decoration: underline;
+  }
+
+  /* Responsive */
+  @media (max-width: 600px) {
+    .container {
+      padding: 40px 16px;
+    }
+    
+    header {
+      margin-bottom: 40px;
+    }
+
+    .posts li {
+      flex-direction: column;
+      gap: 2px;
+      margin-bottom: 16px;
+    }
+
+    .date {
+      font-size: 12px;
+    }
   }
 </style>

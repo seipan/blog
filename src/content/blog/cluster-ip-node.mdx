@@ -1,0 +1,44 @@
+---
+title: 'CLUSTER-IP=None'
+description: 'CLUSTER-IP=Noneについて'
+pubDate: 2025-11-18
+---
+
+import { Code } from 'astro:components';
+
+## CLUSTER-IP=Noneについて
+planeのリソースを自宅サーバーに立てているときに気づいた。
+https://app.plane.so/
+
+```
+❯ kubectl get svc -n plane
+NAME             TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)              AGE
+plane-admin      ClusterIP   None         <none>        3000/TCP             5d17h
+plane-api        ClusterIP   None         <none>        8000/TCP             5d17h
+plane-live       ClusterIP   None         <none>        3000/TCP             20h
+plane-pgdb       ClusterIP   None         <none>        5432/TCP             5d17h
+plane-rabbitmq   ClusterIP   None         <none>        5672/TCP,15672/TCP   20h
+plane-redis      ClusterIP   None         <none>        6379/TCP             5d17h
+plane-space      ClusterIP   None         <none>        3000/TCP             5d17h
+plane-web        ClusterIP   None         <none>        3000/TCP             5d17h
+```
+
+https://kubernetes.io/ja/docs/concepts/services-networking/service/#headless-service
+
+ClusterIPはクラスタ内部のネットワークのポッドからからFQDNでアクセスされたときに, CoreDNSが解決してClusterIPを返却してそこからkube-proxyが負荷分散を行う仕組みになっている認識だったので、
+ClusterIP=Noneの場合はどうなるのか気になった。
+
+> 場合によっては、負荷分散と単一のService IPは不要です。このケースにおいて、clusterIP(.spec.clusterIP)の値を"None"に設定することにより、"Headless"とよばれるServiceを作成できます。
+
+```
+❯ kubectl get ep plane-api -n plane
+Warning: v1 Endpoints is deprecated in v1.33+; use discovery.k8s.io/v1 EndpointSlice
+NAME        ENDPOINTS         AGE
+plane-api   10.0.2.118:8000   5d19h
+```
+
+Endpointのアドレス（＝Podのアドレス）が直接Aレコードに設定され、Podが1つなのでEndpointも1つになっている。
+
+## どういうときに嬉しいのか
+アプリケーション内にロードバランシング機能などがあったら、podのipを一つに固定してしまってそこだけに繋ぐなどで嬉しいのだろうか。
+StatefulなアプリケーションでPod に固有の IDが必要な場合とか？
