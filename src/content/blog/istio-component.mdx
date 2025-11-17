@@ -1,0 +1,89 @@
+---
+title: 'Istioを体系的に理解する'
+description: 'Istioを体系的に理解する'
+pubDate: 2025-11-18
+---
+
+## Istioとは
+マイクロサービス化が進むにつれてA/Bテストやカナリーリリースに20%のアクセスのだけ割り当てたいなどの要望により、サービスメッシュ2はより大きく、より複雑になりました。
+Istioは、このような「複雑なサービスメッシュの管理が追いつかない」という課題を解決するため開発されています。
+
+## Architecture
+![Istio Architecture](https://istio.io/latest/docs/ops/deployment/architecture/arch.svg "Istio Architecture")
+
+Istio のサービスメッシュは、データプレーン（data plane） と コントロールプレーン（control plane） の 2 つに論理的に分割される。
+
+data plane: Envoy
+
+control plane: Istiod
+
+### Envoy
+Envoyは、Istioのデータプレーンを構成するプロキシ。podのサイドカーとして存在しており、サービス間の通信を仲介する。
+
+### Istiod
+Pilot: Envoy に送る設定（Cluser、Listener、Route など）を生成。VirtualService / DestinationRule を解析し、Envoy 用の設定に変換
+Citadel: サービス間の mTLS 通信に必要な証明書を発行・管理
+Galley: Istio の設定を検証・配布
+Sidecar Injector: pod 作成時に Envoy サイドカーを自動的に注入
+
+## 気になり
+### IstioIngressGatewayの実態
+Istio Ingress Gateway の実態は “Envoy プロキシそのもの”
+
+なのでクラスタ外からクラスタ内に来るリクエストは実質Envoy Proxyを通してリクエストが到達する。Sidecar EnvoyはPod < - > Podで動作するがIstioIngressGatewayはクラスタ内外を疎通するだけの違い。
+
+
+### IstioIngressGatewayとVirtualService / Gateway / DestinationRule
+
+#### Gateway
+外部（インターネット）から Mesh に入る “入口” を定義する。TraefikでいうIngressのようなもの。
+
+```yaml
+kind: Gateway
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+  - port:
+      number: 443
+      protocol: HTTPS
+    hosts:
+    - "api.example.com"
+    tls:
+      credentialName: api-cert
+```
+
+これに基づいてIstioIngressGateway内のEnvoyが反応して443ポートをListenし、api.example.comの時のみ受け入れるようになる。
+
+Gatewayリソースはトラフィックを受ける設定をするだけで、どこにどうやって流すかはVirtualServiceリソースが担当する。
+
+#### VirtualService
+先ほどistio-ingressgatewayで受けたトラフィックをどこにどうやって流すかのルールを設定するためのリソース。
+
+Envoy が VirtualService のルールに基づいて L7 ルーティングする。
+```yaml
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: bookinfo
+spec:
+  hosts:
+  - "*"
+  gateways:
+  - bookinfo-gateway
+  http:
+  - match:
+    - uri:
+        exact: /productpage
+    - uri:
+        exact: /login
+    - uri:
+        exact: /logout
+    - uri:
+        prefix: /api/v1/products
+    route:
+    - destination:
+        host: productpage
+        port:
+          number: 9080
+```
