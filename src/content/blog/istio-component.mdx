@@ -57,10 +57,36 @@ spec:
 
 Gatewayリソースはトラフィックを受ける設定をするだけで、どこにどうやって流すかはVirtualServiceリソースが担当する。
 
+stio IngressGatewayが受けたHTTPリクエストは、ホスト名, URL, User Agent, プロトコル, ポート番号, クエリパラメータ, その他HTTPヘッダーなどの情報を元に適切なIstio Gatewayに振り分けられます。
+
+１つのIstio Gatewayには、リクエストの振り分けを行うための詳細な条件を１つ以上設定することができます。例えば、下の例のように example.com と foobar.com の２つのホスト名を設定すれば複数のホスト名に宛てたリクエストを１つのIstio Gatewayに集約することも可能です。
+
+```yaml
+apiVersion: networking.istio.io/v1alpha3
+kind: Gateway
+metadata:
+  name: sample-gateway
+spec:
+  servers:
+    - port:
+        number: 80
+        name: http
+        protocol: HTTP
+      hosts:
+        - example.com
+        - foobar.com
+```
+
+おそらく
+```
+Istio Ingress Gateway -> Gateway(各hostごとに集約) -> VirtualService(具体的な向き先のServiceを決定) 
+```
+
 #### VirtualService
 先ほどistio-ingressgatewayで受けたトラフィックをどこにどうやって流すかのルールを設定するためのリソース。
 
-Envoy が VirtualService のルールに基づいて L7 ルーティングする。
+Envoy が VirtualService のルールに基づいて L7 ルーティングする。以下の場合だと```/productpage```や```logout```などにマッチングしたroutingがproductpageに流れる。
+productpageはおそらくVirtualService。
 ```yaml
 apiVersion: networking.istio.io/v1alpha3
 kind: VirtualService
@@ -87,3 +113,105 @@ spec:
         port:
           number: 9080
 ```
+productpageではどのDestinationRuleでroutingを行うか決定する
+```yaml
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: productpage
+  namespace: ""
+  resourceVersion: ""
+spec:
+  hosts:
+  - productpage   <= productpageへのリクエストを受けるVirtualService
+  http:
+  - route:
+    - destination:
+        host: productpage    <= productpageに
+        subset: v1           <= subset: v1というDestinationRuleでルーティングを行う
+```
+
+なのでserviceに向けてるものも、実態はnginx-service.default.svc.cluster.localをEndpointSliceに問い合わせて、CluterIpを抜いてきてCluterIpに紐づいているPodIpを抜いてきて、それらをもとにPilotが設定を組み立ててEnvoyに流して、Envoyが向ける先のPodを決定して流しているのかなと
+
+#### DestinationRule
+例えば以下のようなパターンだとmy-appへ転送される際にHTTP/2 の同時リクエスト数の上限を 120 にする。
+```yaml
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: my-app
+  namespace: default
+spec:
+  host: my-app.default.svc.cluster.local
+  subsets:
+    - name: my-app-get-user
+      trafficPolicy:
+        connectionPool:
+          http:
+            http2MaxRequests: 120
+    - name: my-app-default
+```
+
+恐らく以下の画像の認識が正しくて、VirtualServiceはL7で後ろに存在するServiceをroutingする。その具体的な送信ルールを決定するのがDestinationRule。
+![Istio Architecture](https://qiita-user-contents.imgix.net/https%3A%2F%2Fqiita-image-store.s3.ap-northeast-1.amazonaws.com%2F0%2F230552%2Fb72bca05-a214-62dd-cd6c-9c7170ea2459.png?ixlib=rb-4.0.0&auto=format&gif-q=60&q=75&s=539cb8825cac80bbd36da04385906b88 "Istio Architecture")
+
+DestinationRuleは以下のようなことができるので、L4, L7でのロードバランシングができる。できるとは言っても実態はEnvoyProxyだと思うが。
+だから割とDestinationRuleもVirtualServiceもL7, L4の教会が曖昧で、それはEnvoyProxyがなんでもできちゃうから。
+
+```yaml
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+  name: reviews
+  namespace: default
+spec:
+  host: reviews
+  subsets:
+  - labels:
+      version: v1
+    name: v1
+  - labels:
+      version: v2
+    name: v2
+  - labels:
+      version: v3
+    name: v3
+```
+
+こんなイメージなのかなと
+
+```
+App A
+  ↓
+Envoy (A sidecar)
+  ↓
+VirtualService（reviews の subset を選ぶ）
+  ↓
+DestinationRule（subset v2 = version=v2 の Pod 集合）
+  ↓
+Envoy が Pod IP に直接ロードバランス
+  ↓
+reviews Pod (v2)
+```
+
+### Serviceはどうなったのか
+一般的にServiceがkubeproxyによってpodのL4ロードバランシングを行っているイメージだったが、Istio配下においてその部分をVirtualService, DestinationRuleに則ってEnvoy Proxyが行ってしまう。
+
+通信は全てProxyコンテナ間で行われ、各ProxyコンテナはPilotによって作成されたルーティングルールに沿って通信を行う。
+
+では一体Serviceは何に使われるのかというと、Pilotがルーティングルールを作成する際に利用している。おそらくServiceが作成された際のEndpointを見てそのClusterIpを使用してPilotが名前解決している。
+
+EndpointはServiceが作成されるとと作られるのでServiceが必要。
+
+```
+$ kubectl get services
+NAME          TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)    AGE
+details       ClusterIP   10.0.0.31    <none>        9080/TCP   6m
+kubernetes    ClusterIP   10.0.0.1     <none>        443/TCP    7d
+productpage   ClusterIP   10.0.0.120   <none>        9080/TCP   6m
+ratings       ClusterIP   10.0.0.15    <none>        9080/TCP   6m
+reviews       ClusterIP   10.0.0.170   <none>        9080/TCP   6m
+```
+
+## 感想
+Istioの世界観(VirtualService / Gateway / DestinationRule)と、それを実際に構成しているEnvoy Proxyが状態としてかなり違うので理解しがたい。
