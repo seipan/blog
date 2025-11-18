@@ -1,0 +1,305 @@
+---
+title: 'VirtualService -> HttpRoute'
+description: 'VirtualService -> HttpRouteを理解する'
+pubDate: 2025-11-19
+---
+
+# 前段
+localで試したいのでkindを構築する。versionは見てないけど古いかも。
+
+```
+go install sigs.k8s.io/kind@v0.22.0
+```
+
+clusterを作成する。
+
+```
+> kind create cluster
+Creating cluster "kind" ...
+ ✓ Ensuring node image (kindest/node:v1.29.2) 🖼
+ ✓ Preparing nodes 📦
+ ✓ Writing configuration 📜
+ ✓ Starting control-plane 🕹️
+ ✓ Installing CNI 🔌
+ ✓ Installing StorageClass 💾
+Set kubectl context to "kind-kind"
+You can now use your cluster with:
+
+kubectl cluster-info --context kind-kind
+
+Have a question, bug, or feature request? Let us know! https://kind.sigs.k8s.io/#community 🙂
+> kubectl get nodes
+NAME                 STATUS   ROLES           AGE   VERSION
+kind-control-plane   Ready    control-plane   24s   v1.29.2
+```
+
+istioctlをinstallする。
+
+```
+curl -sL https://istio.io/downloadIstioctl | sh -
+```
+
+# Istio Tutorial
+
+まずはVirtualServiceでIstioを構築してみる。以下を参考にする。
+
+https://istio.io/latest/docs/setup/getting-started/
+
+サンプルのファイルがどこに存在しているのか不明すぎたのでistioをcloneしてきた。
+
+```
+git clone git@github.com:istio/istio.git
+```
+
+istioを入れる
+
+```
+istioctl install -f samples/bookinfo/demo-profile-no-gateways.yaml -y
+kubectl label namespace default istio-injection=enabled
+```
+
+gatewayCRDを入れる。
+```
+kubectl get crd gateways.gateway.networking.k8s.io &> /dev/null || \
+{ kubectl kustomize "github.com/kubernetes-sigs/gateway-api/config/crd?ref=v1.4.0" | kubectl apply -f -; }
+```
+
+## Sampleアプリケーション
+一旦何も考えずにapplyする。
+
+```
+kubectl apply -f samples/bookinfo/platform/kube/bookinfo.yaml
+service/details created
+serviceaccount/bookinfo-details created
+deployment.apps/details-v1 created
+service/ratings created
+serviceaccount/bookinfo-ratings created
+deployment.apps/ratings-v1 created
+service/reviews created
+serviceaccount/bookinfo-reviews created
+deployment.apps/reviews-v1 created
+deployment.apps/reviews-v2 created
+deployment.apps/reviews-v3 created
+service/productpage created
+serviceaccount/bookinfo-productpage created
+deployment.apps/productpage-v1 created
+```
+
+結果
+
+```
+> kubectl get services
+NAME          TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)    AGE
+details       ClusterIP   10.96.73.168    <none>        9080/TCP   36s
+kubernetes    ClusterIP   10.96.0.1       <none>        443/TCP    53m
+productpage   ClusterIP   10.96.149.165   <none>        9080/TCP   35s
+ratings       ClusterIP   10.96.174.181   <none>        9080/TCP   36s
+reviews       ClusterIP   10.96.143.122   <none>        9080/TCP   36s
+```
+
+```
+> kubectl exec "$(kubectl get pod -l app=ratings -o jsonpath='{.items[0].metadata.name}')" -c ratings -- curl -sS productpage:9080/productpage | grep -o "<title>.*</title>"
+<title>Simple Bookstore App</title>
+```
+
+GateWayをapplyする。
+
+```
+kubectl apply -f samples/bookinfo/gateway-api/bookinfo-gateway.yaml
+```
+
+serviceType:ClusterIPにanntateする。
+
+```
+kubectl annotate gateway bookinfo-gateway networking.istio.io/service-type=ClusterIP --namespace=default
+```
+
+## VirtualServiceを構成する。
+以下のような、end-user: jason という HTTP ヘッダを持つリクエストは reviews v2 へルーティング、それ以外はv3へルーティングするようなVirtualServiceをapplyする。
+
+```yaml
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: reviews
+spec:
+  hosts:
+  - reviews
+  http:
+  - match:
+    - headers:
+        end-user:
+          exact: jason
+    route:
+    - destination:
+        host: reviews
+        subset: v2
+  - route:
+    - destination:
+        host: reviews
+        subset: v3
+```
+
+subsetに基づくDesitinationRuleも必要
+
+```yaml
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: reviews
+spec:
+  host: reviews
+  trafficPolicy:
+    loadBalancer:
+      simple: RANDOM
+  subsets:
+  - name: v1
+    labels:
+      version: v1
+  - name: v2
+    labels:
+      version: v2
+  - name: v3
+    labels:
+      version: v3
+```
+
+以下のようにVirtualServiceが作成されるのが分かる。
+```
+> kubectl get virtualservice -A
+NAMESPACE   NAME       GATEWAYS               HOSTS         AGE
+default     bookinfo   ["bookinfo-gateway"]   ["*"]         5m23s
+default     reviews                           ["reviews"]   6s
+```
+
+ユーザー: jasonでloginする。そうするとreviewの項目のイルカが```Reviews served by: reviews-v2-75f48cdfc6-ppp6g ```となるのが分かる。
+
+### どうでもいいこと
+
+VirtualServiceは同じhostに対して複数の設定を読み込ませると内部でconflictしてしまうらしい。
+
+以下のように同じhost(reviews)に対して別のVirtualServiceをApplyしてみる。以下はすべてのトラフィックをv1に流します。
+
+```yaml
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: reviews-conflict
+spec:
+  hosts:
+  - reviews
+  http:
+  - route:
+    - destination:
+        host: reviews
+        subset: v1
+      weight: 100
+```
+
+こいつをapplyしましたが、挙動は以前前のままです。istioctl analyzeするとErrorが出てます。
+
+```
+Error [IST0109] (VirtualService default/reviews-conflict) The VirtualServices default/reviews,default/reviews-conflict associated with mesh gateway define the same host */reviews.default.svc.cluster.local which can lead to undefined behavior. This can be fixed by merging the conflicting VirtualServices into a single resource.
+Error [IST0109] (VirtualService default/reviews) The VirtualServices default/reviews,default/reviews-conflict associated with mesh gateway define the same host */reviews.default.svc.cluster.local which can lead to undefined behavior. This can be fixed by merging the conflicting VirtualServices into a single resource.
+```
+
+## これをHttpRouteに置き換える
+さっきまでのVirtualServiceを消し去ります。
+```
+kubectl delete virtualservice reviews reviews-conflict
+```
+次にreviewsのVirtualServiceをHttpRouteで実現する。end-user: jason という HTTP ヘッダを持つリクエストは reviews v2 へルーティング、それ以外はv3へルーティングする。
+HttpRouteはistioのsubsetを認識するすべがなさそうだったので、Serviceを作成することになる。
+
+```
+apiVersion: v1
+kind: Service
+metadata:
+  name: reviews-v1
+spec:
+  selector:
+    app: reviews
+    version: v1
+  ports:
+  - port: 9080
+    name: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: reviews-v2
+spec:
+  selector:
+    app: reviews
+    version: v2
+  ports:
+  - port: 9080
+    name: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: reviews-v3
+spec:
+  selector:
+    app: reviews
+    version: v3
+  ports:
+  - port: 9080
+    name: http
+```
+
+に対して以下をapplyする。
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: reviews-jason-native
+spec:
+  parentRefs:
+  - kind: Service
+    group: ""
+    name: reviews
+  rules:
+  - matches:
+    - headers:
+      - name: end-user
+        value: jason
+        type: Exact
+    backendRefs:
+    - name: reviews-v2
+      port: 9080
+  - backendRefs:
+    - name: reviews-v3
+      port: 9080
+```
+
+するとjasonの時だけreview-2になる。次に以下の設定をapplyする。
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: reviews-jason-native2
+spec:
+  parentRefs:
+  - kind: Service
+    group: ""
+    name: reviews
+  rules:
+  - matches:
+    - headers:
+      - name: end-user
+        value: jason2
+        type: Exact
+    backendRefs:
+    - name: reviews-v1
+      port: 9080
+```
+
+すると、jason2の時だけreview-1となり、それ以外だとreview-3となる。
+
+# 感想
+HTTPRouteは追加のルールを追加出来て、それ以外ならデフォルトの流し方ができて便利。
+あくまでもL7でのルーティングなので、pod単位でのカナリアリリースの制御をしようと思うとVirtualServiceは必要そう。
