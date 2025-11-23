@@ -1,0 +1,144 @@
+name: Deploy Astro Blog to MinIO
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'src/**'
+      - 'apps/blog/**'
+      - '.github/workflows/deploy-blog.yml'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'astro.config.*'
+
+jobs:
+  build-and-upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      MINIO_ALIAS: blog-minio
+      MC_VERSION: RELEASE.2024-11-17T19-35-25Z
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22' 
+          cache: 'npm'
+          cache-dependency-path: apps/blog/package-lock.json
+
+      - name: Cache MinIO Client
+        id: cache-mc
+        uses: actions/cache@v4
+        with:
+          path: ./mc
+          key: minio-client-${{ env.MC_VERSION }}-${{ runner.os }}
+
+      - name: Install MinIO Client (mc)
+        if: steps.cache-mc.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          MC_URL="https://dl.min.io/client/mc/release/linux-amd64/archive/mc.${MC_VERSION}"
+          echo "Downloading MinIO Client from: $MC_URL"
+          
+          curl -sSL "$MC_URL" -o mc
+          curl -sSL "$MC_URL.sha256sum" -o mc.sha256sum
+          
+          sha256sum -c mc.sha256sum
+          
+          chmod +x mc
+          ./mc --version
+
+      - name: Install dependencies
+        working-directory: apps/blog
+        run: |
+          npm ci --no-audit --prefer-offline
+
+      - name: Build Astro
+        working-directory: apps/blog
+        run: |
+          npm run build
+          
+          # Check build output size
+          echo "Build output size:"
+          du -sh dist/
+
+      - name: Configure MinIO Client
+        env:
+          MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT }}
+          MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
+          MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
+        run: |
+          set +x  
+          ./mc alias set "$MINIO_ALIAS" "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+          
+          ./mc admin info "$MINIO_ALIAS" --json > /dev/null || {
+            echo "Failed to connect to MinIO"
+            exit 1
+          }
+
+      - name: Upload dist to MinIO with retry
+        env:
+          MINIO_BUCKET: ${{ secrets.MINIO_BUCKET }}
+          MINIO_PREFIX: ${{ secrets.MINIO_PREFIX }}
+        run: |
+          set -euo pipefail
+          
+          ./mc mb --ignore-existing "$MINIO_ALIAS/$MINIO_BUCKET"
+          
+          DEST_PATH="$MINIO_ALIAS/$MINIO_BUCKET/$MINIO_PREFIX"
+          echo "Syncing apps/blog/dist -> $DEST_PATH"
+          
+          sync_with_retry() {
+            local max_attempts=3
+            local attempt=1
+            
+            while [ $attempt -le $max_attempts ]; do
+              echo "Sync attempt $attempt of $max_attempts..."
+              
+              if ./mc mirror --overwrite --remove \
+                --exclude ".DS_Store" \
+                --exclude "*.map" \
+                apps/blog/dist \
+                "$DEST_PATH"; then
+                echo "Sync completed successfully"
+                return 0
+              fi
+              
+              echo "Sync failed, retrying in 5 seconds..."
+              sleep 5
+              ((attempt++))
+            done
+            
+            echo "Sync failed after $max_attempts attempts"
+            return 1
+          }
+          
+          sync_with_retry
+          
+          echo "Verifying uploaded files:"
+          ./mc ls -r "$DEST_PATH" | head -20
+
+      - name: Set cache headers
+        if: success()
+        env:
+          MINIO_BUCKET: ${{ secrets.MINIO_BUCKET }}
+          MINIO_PREFIX: ${{ secrets.MINIO_PREFIX }}
+        run: |
+          DEST_PATH="$MINIO_ALIAS/$MINIO_BUCKET/$MINIO_PREFIX"
+          
+          ./mc find "$DEST_PATH" --name "*.js" -o --name "*.css" -o --name "*.woff2" | while read -r file; do
+            ./mc anonymous set download "$file"
+            ./mc stat "$file" --json | jq -e '.metadata."cache-control" = "public, max-age=31536000, immutable"' > /dev/null || \
+              echo "Warning: Could not set cache headers for $file"
+          done
+          
+          ./mc find "$DEST_PATH" --name "*.html" | while read -r file; do
+            ./mc anonymous set download "$file"
+            ./mc stat "$file" --json | jq -e '.metadata."cache-control" = "public, max-age=3600"' > /dev/null || \
+              echo "Warning: Could not set cache headers for $file"
+          done
