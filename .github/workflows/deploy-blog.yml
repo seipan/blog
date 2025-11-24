@@ -5,7 +5,7 @@ on:
     branches: [ main ]
     paths:
       - 'src/**'
-      - 'apps/blog/**'
+      - 'src/**'
       - '.github/workflows/deploy-blog.yml'
       - 'package.json'
       - 'package-lock.json'
@@ -29,7 +29,7 @@ jobs:
         with:
           node-version: '22' 
           cache: 'npm'
-          cache-dependency-path: './apps/blog/package-lock.json'
+          cache-dependency-path: './package-lock.json'
 
       - name: Cache MinIO Client
         id: cache-mc
@@ -54,12 +54,10 @@ jobs:
           ./mc --version
 
       - name: Install dependencies
-        working-directory: apps/blog
         run: |
           npm ci --no-audit --prefer-offline
 
       - name: Build Astro
-        working-directory: apps/blog
         run: |
           npm run build
           
@@ -91,7 +89,7 @@ jobs:
           ./mc mb --ignore-existing "$MINIO_ALIAS/$MINIO_BUCKET"
           
           DEST_PATH="$MINIO_ALIAS/$MINIO_BUCKET/$MINIO_PREFIX"
-          echo "Syncing apps/blog/dist -> $DEST_PATH"
+          echo "Syncing dist -> $DEST_PATH"
           
           sync_with_retry() {
             local max_attempts=3
@@ -103,7 +101,7 @@ jobs:
               if ./mc mirror --overwrite --remove \
                 --exclude ".DS_Store" \
                 --exclude "*.map" \
-                apps/blog/dist \
+                dist \
                 "$DEST_PATH"; then
                 echo "Sync completed successfully"
                 return 0
