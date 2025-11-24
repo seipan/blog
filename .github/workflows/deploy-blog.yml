@@ -61,14 +61,38 @@ jobs:
           echo "Build output size:"
           du -sh dist/
 
-      - name: Configure MinIO Client
+      - name: Configure MinIO Client through Cloudflare Access
         env:
           MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT }}
           MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
           MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
-          set +x  
-          ./mc alias set "$MINIO_ALIAS" "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+          set +x
+          
+          # MinIO doesn't support custom headers, so we'll use cloudflared access
+          # Install cloudflared
+          wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          sudo dpkg -i cloudflared-linux-amd64.deb
+          
+          # Configure cloudflared to proxy requests with service token
+          mkdir -p ~/.cloudflared
+          
+          # Extract hostname from MINIO_ENDPOINT
+          MINIO_HOST=$(echo "$MINIO_ENDPOINT" | sed -E 's|https?://([^/:]+).*|\1|')
+          
+          # Start cloudflared access tunnel with service token
+          cloudflared access tcp --hostname "$MINIO_HOST" \
+            --url localhost:9000 \
+            --header "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+            --header "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" &
+          
+          # Wait for tunnel to be ready
+          sleep 5
+          
+          # Configure mc to use local proxy
+          ./mc alias set "$MINIO_ALIAS" "http://localhost:9000" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
           
           ./mc admin info "$MINIO_ALIAS" --json > /dev/null || {
             echo "Failed to connect to MinIO"
