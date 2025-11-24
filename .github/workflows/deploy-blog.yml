@@ -18,7 +18,6 @@ jobs:
 
     env:
       MINIO_ALIAS: blog-minio
-      MC_VERSION: RELEASE.2025-07-21T05-28-08Z
 
     steps:
       - name: Checkout
@@ -36,19 +35,16 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ./mc
-          key: minio-client-${{ env.MC_VERSION }}-${{ runner.os }}
+          key: minio-client-latest-${{ runner.os }}
 
       - name: Install MinIO Client (mc)
         if: steps.cache-mc.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
-          MC_URL="https://dl.min.io/client/mc/release/linux-amd64/archive/mc.${MC_VERSION}"
+          MC_URL="https://dl.min.io/client/mc/release/linux-amd64/mc"
           echo "Downloading MinIO Client from: $MC_URL"
           
           curl -sSL "$MC_URL" -o mc
-          curl -sSL "$MC_URL.sha256sum" -o mc.sha256sum
-          
-          sha256sum -c mc.sha256sum
           
           chmod +x mc
           ./mc --version
