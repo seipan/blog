@@ -3,21 +3,10 @@ name: Deploy Astro Blog to MinIO
 on:
   push:
     branches: [ main ]
-    paths:
-      - 'src/**'
-      - 'src/**'
-      - '.github/workflows/deploy-blog.yml'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'astro.config.*'
 
 jobs:
-  build-and-upload:
+  deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    env:
-      MINIO_ALIAS: blog-minio
 
     steps:
       - name: Checkout
@@ -26,176 +15,37 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '22' 
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: './package-lock.json'
 
-      - name: Cache MinIO Client
-        id: cache-mc
-        uses: actions/cache@v4
-        with:
-          path: ./mc
-          key: minio-client-latest-${{ runner.os }}
+      - name: Install dependencies
+        run: npm ci --no-audit --prefer-offline
 
-      - name: Install MinIO Client (mc)
-        if: steps.cache-mc.outputs.cache-hit != 'true'
+      - name: Build Astro
+        run: npm run build
+
+      - name: Install mc
         run: |
-          set -euo pipefail
-          MC_URL="https://dl.min.io/client/mc/release/linux-amd64/mc"
-          echo "Downloading MinIO Client from: $MC_URL"
-          
-          curl -sSL "$MC_URL" -o mc
-          
+          curl -sSL https://dl.min.io/client/mc/release/linux-amd64/mc -o mc
           chmod +x mc
           ./mc --version
 
-      - name: Install dependencies
-        run: |
-          npm ci --no-audit --prefer-offline
-
-      - name: Build Astro
-        run: |
-          npm run build
-          
-          # Check build output size
-          echo "Build output size:"
-          du -sh dist/
-
-      - name: Configure MinIO Client through Cloudflare Access
+      - name: Upload to MinIO
         env:
-          MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT }}
+          MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT }} # http://public-minio-host:9000
           MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
           MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
-          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-        run: |
-          set +x
-          wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
-          sudo dpkg -i cloudflared-linux-amd64.deb
-
-          mkdir -p ~/.cloudflared
-
-          # Parse the endpoint to get components
-          MINIO_PROTOCOL=$(echo "$MINIO_ENDPOINT" | sed -E 's|^(https?)://.*|\1|')
-          MINIO_HOST=$(echo "$MINIO_ENDPOINT" | sed -E 's|https?://([^/:]+).*|\1|')
-          MINIO_PORT=$(echo "$MINIO_ENDPOINT" | sed -E 's|https?://[^/:]+:?([0-9]+)?.*|\1|')
-          
-          # Default port based on protocol if not specified
-          if [ -z "$MINIO_PORT" ]; then
-            if [ "$MINIO_PROTOCOL" = "https" ]; then
-              MINIO_PORT="443"
-            else
-              MINIO_PORT="80"
-            fi
-          fi
-
-          echo "MINIO_ENDPOINT: $MINIO_ENDPOINT"
-          echo "MINIO_PROTOCOL: $MINIO_PROTOCOL"
-          echo "MINIO_HOST: $MINIO_HOST"
-          echo "MINIO_PORT: $MINIO_PORT"
-          echo "CF_ACCESS_CLIENT_ID length: ${#CF_ACCESS_CLIENT_ID}"
-          echo "CF_ACCESS_CLIENT_SECRET length: ${#CF_ACCESS_CLIENT_SECRET}"
-          
-          # Try connecting to the actual protocol/port combination
-          cloudflared access tcp \
-            --hostname "$MINIO_HOST:$MINIO_PORT" \
-            --url "localhost:9000" \
-            --service-token-id "$CF_ACCESS_CLIENT_ID" \
-            --service-token-secret "$CF_ACCESS_CLIENT_SECRET" \
-            --protocol http2 \
-            --loglevel debug &
-
-          CLOUDFLARED_PID=$!
-          
-          # Wait for tunnel to be ready
-          echo "Waiting for cloudflared tunnel to establish..."
-          for i in {1..30}; do
-            if timeout 1 bash -c 'echo > /dev/tcp/localhost/9000' 2>/dev/null; then
-              echo "Tunnel is ready after $i seconds"
-              break
-            fi
-            if ! ps -p $CLOUDFLARED_PID > /dev/null; then
-              echo "cloudflared process died unexpectedly"
-              wait $CLOUDFLARED_PID
-              exit 1
-            fi
-            sleep 1
-          done
-          
-          # Final check
-          if ! timeout 5 bash -c 'echo > /dev/tcp/localhost/9000' 2>/dev/null; then
-            echo "Failed to establish tunnel after 30 seconds"
-            echo "cloudflared logs:"
-            ps aux | grep cloudflared
-            exit 1
-          fi
-
-          ./mc alias set "$MINIO_ALIAS" "http://localhost:9000" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
-
-          # 接続確認
-          ./mc admin info "$MINIO_ALIAS" --json > /dev/null || {
-            echo "Failed to connect to MinIO via cloudflared tunnel"
-            exit 1
-          }
-
-      - name: Upload dist to MinIO with retry
-        env:
           MINIO_BUCKET: ${{ secrets.MINIO_BUCKET }}
           MINIO_PREFIX: ${{ secrets.MINIO_PREFIX }}
         run: |
-          set -euo pipefail
-          
-          ./mc mb --ignore-existing "$MINIO_ALIAS/$MINIO_BUCKET"
-          
-          DEST_PATH="$MINIO_ALIAS/$MINIO_BUCKET/$MINIO_PREFIX"
-          echo "Syncing dist -> $DEST_PATH"
-          
-          sync_with_retry() {
-            local max_attempts=3
-            local attempt=1
-            
-            while [ $attempt -le $max_attempts ]; do
-              echo "Sync attempt $attempt of $max_attempts..."
-              
-              if ./mc mirror --overwrite --remove \
-                --exclude ".DS_Store" \
-                --exclude "*.map" \
-                dist \
-                "$DEST_PATH"; then
-                echo "Sync completed successfully"
-                return 0
-              fi
-              
-              echo "Sync failed, retrying in 5 seconds..."
-              sleep 5
-              ((attempt++))
-            done
-            
-            echo "Sync failed after $max_attempts attempts"
-            return 1
-          }
-          
-          sync_with_retry
-          
-          echo "Verifying uploaded files:"
-          ./mc ls -r "$DEST_PATH" | head -20
+          ./mc alias set blog "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
 
-      - name: Set cache headers
-        if: success()
-        env:
-          MINIO_BUCKET: ${{ secrets.MINIO_BUCKET }}
-          MINIO_PREFIX: ${{ secrets.MINIO_PREFIX }}
-        run: |
-          DEST_PATH="$MINIO_ALIAS/$MINIO_BUCKET/$MINIO_PREFIX"
-          
-          ./mc find "$DEST_PATH" --name "*.js" -o --name "*.css" -o --name "*.woff2" | while read -r file; do
-            ./mc anonymous set download "$file"
-            ./mc stat "$file" --json | jq -e '.metadata."cache-control" = "public, max-age=31536000, immutable"' > /dev/null || \
-              echo "Warning: Could not set cache headers for $file"
-          done
-          
-          ./mc find "$DEST_PATH" --name "*.html" | while read -r file; do
-            ./mc anonymous set download "$file"
-            ./mc stat "$file" --json | jq -e '.metadata."cache-control" = "public, max-age=3600"' > /dev/null || \
-              echo "Warning: Could not set cache headers for $file"
-          done
+          ./mc mb --ignore-existing blog/$MINIO_BUCKET
+
+          ./mc mirror \
+            --overwrite --remove \
+            dist \
+            blog/$MINIO_BUCKET/$MINIO_PREFIX
+
+          ./mc ls blog/$MINIO_BUCKET/$MINIO_PREFIX
