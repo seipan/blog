@@ -25,21 +25,71 @@ jobs:
       - name: Build Astro
         run: npm run build
 
+      - name: Write Access Header Proxy (Node.js)
+        env:
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT }}   # 例: https://s3.yadon3141.com
+        run: |
+          cat << 'EOF' > proxy.js
+          import http from 'http';
+          import https from 'https';
+          import { URL } from 'url';
+
+          const target = process.env.MINIO_ENDPOINT;  // Cloudflare Access の URL
+          const id = process.env.CF_ACCESS_CLIENT_ID;
+          const secret = process.env.CF_ACCESS_CLIENT_SECRET;
+
+          const server = http.createServer((clientReq, clientRes) => {
+            const url = new URL(clientReq.url, target);
+
+            const options = {
+              method: clientReq.method,
+              headers: {
+                ...clientReq.headers,
+                'CF-Access-Client-Id': id,
+                'CF-Access-Client-Secret': secret,
+                host: url.host,
+              }
+            };
+
+            const proxyReq = https.request(url, options, (proxyRes) => {
+              clientRes.writeHead(proxyRes.statusCode, proxyRes.headers);
+              proxyRes.pipe(clientRes);
+            });
+
+            proxyReq.on('error', (err) => {
+              console.error("Proxy error:", err);
+              clientRes.writeHead(500);
+              clientRes.end("Proxy error");
+            });
+
+            clientReq.pipe(proxyReq);
+          });
+
+          server.listen(19000, () => {
+            console.log("Access header proxy running on http://localhost:19000");
+          });
+          EOF
+
+      - name: Start Proxy in Background
+        run: node proxy.js &
+
       - name: Install mc
         run: |
           curl -sSL https://dl.min.io/client/mc/release/linux-amd64/mc -o mc
           chmod +x mc
           ./mc --version
 
-      - name: Upload to MinIO
+      - name: Upload via Proxy to MinIO (with Access)
         env:
-          MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT }} # http://public-minio-host:9000
           MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
           MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
           MINIO_BUCKET: ${{ secrets.MINIO_BUCKET }}
           MINIO_PREFIX: ${{ secrets.MINIO_PREFIX }}
         run: |
-          ./mc alias set blog "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+          # プロキシを MinIO エンドポイントとして扱う
+          ./mc alias set blog "http://localhost:19000" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
 
           ./mc mb --ignore-existing blog/$MINIO_BUCKET
 
