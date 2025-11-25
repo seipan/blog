@@ -83,9 +83,25 @@ jobs:
             --hostname "$MINIO_HOST" \
             --url localhost:9000 \
             --service-token-id "$CF_ACCESS_CLIENT_ID" \
-            --service-token-secret "$CF_ACCESS_CLIENT_SECRET" &
+            --service-token-secret "$CF_ACCESS_CLIENT_SECRET" \
+            --loglevel debug &
 
+          CLOUDFLARED_PID=$!
           sleep 10
+          
+          # Check if cloudflared is still running
+          if ! ps -p $CLOUDFLARED_PID > /dev/null; then
+            echo "cloudflared process died unexpectedly"
+            exit 1
+          fi
+          
+          # Test TCP connection
+          echo "Testing TCP connection to localhost:9000..."
+          timeout 5 bash -c 'echo > /dev/tcp/localhost/9000' || {
+            echo "Failed to connect to localhost:9000"
+            ps aux | grep cloudflared
+            exit 1
+          }
 
           ./mc alias set "$MINIO_ALIAS" "http://localhost:9000" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
 
