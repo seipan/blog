@@ -25,55 +25,79 @@ jobs:
       - name: Build Astro
         run: npm run build
 
-      - name: Write Access Header Proxy (Node.js)
-        env:
-          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-          MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT }}   # 例: https://s3.yadon3141.com
-        run: |
-          cat << 'EOF' > proxy.js
-          import http from 'http';
-          import https from 'https';
-          import { URL } from 'url';
+      # ← ここから追加 / 修正
 
-          const target = process.env.MINIO_ENDPOINT;  // Cloudflare Access の URL
+      - name: Write Access Header Proxy (Node.js, CommonJS)
+        run: |
+          cat << 'EOF' > proxy.cjs
+          const http = require('http');
+          const https = require('https');
+          const { URL } = require('url');
+
+          const target = process.env.MINIO_ENDPOINT;  // 例: https://s3.yadon3141.com
           const id = process.env.CF_ACCESS_CLIENT_ID;
           const secret = process.env.CF_ACCESS_CLIENT_SECRET;
 
-          const server = http.createServer((clientReq, clientRes) => {
-            const url = new URL(clientReq.url, target);
+          if (!target || !id || !secret) {
+            console.error('Missing MINIO_ENDPOINT / CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET');
+          } else {
+            console.log('Proxy target:', target);
+          }
 
-            const options = {
-              method: clientReq.method,
-              headers: {
+          const server = http.createServer((clientReq, clientRes) => {
+            try {
+              const url = new URL(clientReq.url, target);
+
+              const headers = {
                 ...clientReq.headers,
                 'CF-Access-Client-Id': id,
                 'CF-Access-Client-Secret': secret,
                 host: url.host,
+              };
+
+              const options = {
+                method: clientReq.method,
+                headers,
+              };
+
+              const proxyReq = https.request(url, options, (proxyRes) => {
+                clientRes.writeHead(proxyRes.statusCode || 500, proxyRes.headers);
+                proxyRes.pipe(clientRes);
+              });
+
+              proxyReq.on('error', (err) => {
+                console.error('Proxy request error:', err);
+                if (!clientRes.headersSent) {
+                  clientRes.writeHead(502);
+                }
+                clientRes.end('Proxy error');
+              });
+
+              clientReq.pipe(proxyReq);
+            } catch (err) {
+              console.error('Proxy handler error:', err);
+              if (!clientRes.headersSent) {
+                clientRes.writeHead(500);
               }
-            };
-
-            const proxyReq = https.request(url, options, (proxyRes) => {
-              clientRes.writeHead(proxyRes.statusCode, proxyRes.headers);
-              proxyRes.pipe(clientRes);
-            });
-
-            proxyReq.on('error', (err) => {
-              console.error("Proxy error:", err);
-              clientRes.writeHead(500);
-              clientRes.end("Proxy error");
-            });
-
-            clientReq.pipe(proxyReq);
+              clientRes.end('Proxy handler error');
+            }
           });
 
-          server.listen(19000, () => {
-            console.log("Access header proxy running on http://localhost:19000");
+          const port = 19000;
+          server.listen(port, '0.0.0.0', () => {
+            console.log(`Access header proxy running on http://0.0.0.0:${port}`);
           });
           EOF
 
       - name: Start Proxy in Background
-        run: node proxy.js &
+        env:
+          MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT }}          # https://s3.yadon3141.com みたいな Access 保護エンドポイント
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          node proxy.cjs &
+          # 起動待ち
+          sleep 5
 
       - name: Install mc
         run: |
@@ -89,7 +113,7 @@ jobs:
           MINIO_PREFIX: ${{ secrets.MINIO_PREFIX }}
         run: |
           # プロキシを MinIO エンドポイントとして扱う
-          ./mc alias set blog "http://localhost:19000" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+          ./mc alias set blog "http://127.0.0.1:19000" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
 
           ./mc mb --ignore-existing blog/$MINIO_BUCKET
 
