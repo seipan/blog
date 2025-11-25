@@ -79,9 +79,15 @@ jobs:
 
           echo "MINIO_HOST=$MINIO_HOST"
 
+          # Debug: Check if we have the correct hostname
+          echo "Attempting to connect to: $MINIO_HOST"
+          echo "CF_ACCESS_CLIENT_ID length: ${#CF_ACCESS_CLIENT_ID}"
+          echo "CF_ACCESS_CLIENT_SECRET length: ${#CF_ACCESS_CLIENT_SECRET}"
+          
+          # Try with explicit protocol and port
           cloudflared access tcp \
             --hostname "$MINIO_HOST" \
-            --url localhost:9000 \
+            --url "tcp://localhost:9000" \
             --service-token-id "$CF_ACCESS_CLIENT_ID" \
             --service-token-secret "$CF_ACCESS_CLIENT_SECRET" \
             --loglevel debug &
