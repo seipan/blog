@@ -8,7 +8,6 @@ on:
 env:
   NODE_VERSION: '22'
   MC_VERSION: 'latest'
-  PROXY_PORT: '19000'
 
 jobs:
   deploy:
@@ -32,27 +31,6 @@ jobs:
       - name: Build Astro site
         run: npm run build
 
-      - name: Start CloudFlare Access proxy
-        env:
-          MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT }}
-          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-          PROXY_PORT: ${{ env.PROXY_PORT }}
-        run: |
-          echo "Starting CloudFlare Access proxy..."
-          node .github/scripts/cf-access-proxy.cjs &
-          PROXY_PID=$!
-          echo "PROXY_PID=$PROXY_PID" >> $GITHUB_ENV
-          
-          # Wait for proxy to be ready
-          for i in {1..30}; do
-            if curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:${{ env.PROXY_PORT }} | grep -q "[0-9]"; then
-              echo "Proxy is ready"
-              break
-            fi
-            echo "Waiting for proxy to start (attempt $i/30)..."
-            sleep 1
-          done
 
 
       - name: Install MinIO Client (mc)
@@ -64,43 +42,47 @@ jobs:
 
       - name: Configure MinIO alias
         env:
+          MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT }}
           MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
           MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
         run: |
           echo "Configuring MinIO alias..."
-          ./mc alias set blog "http://127.0.0.1:${{ env.PROXY_PORT }}" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+          ./mc alias set blog "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
           ./mc alias ls blog
 
       - name: Ensure bucket exists
         env:
           MINIO_BUCKET: ${{ secrets.MINIO_BUCKET }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
           echo "Ensuring bucket exists: $MINIO_BUCKET"
-          ./mc mb --ignore-existing blog/$MINIO_BUCKET || true
+          ./mc --header "CF-Access-Client-Id:${CF_ACCESS_CLIENT_ID}" \
+             --header "CF-Access-Client-Secret:${CF_ACCESS_CLIENT_SECRET}" \
+             mb --ignore-existing blog/$MINIO_BUCKET || true
 
       - name: Upload to MinIO
         env:
           MINIO_BUCKET: ${{ secrets.MINIO_BUCKET }}
           MINIO_PREFIX: ${{ secrets.MINIO_PREFIX }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
           echo "Starting upload to MinIO..."
           echo "  Bucket: $MINIO_BUCKET"
           echo "  Prefix: $MINIO_PREFIX"
           
-          ./mc mirror \
-            --overwrite \
-            --remove \
-            --exclude "*.map" \
-            dist/ \
-            blog/$MINIO_BUCKET/$MINIO_PREFIX
+          ./mc --header "CF-Access-Client-Id:${CF_ACCESS_CLIENT_ID}" \
+             --header "CF-Access-Client-Secret:${CF_ACCESS_CLIENT_SECRET}" \
+             mirror \
+             --overwrite \
+             --remove \
+             --exclude "*.map" \
+             dist/ \
+             blog/$MINIO_BUCKET/$MINIO_PREFIX
           
           echo "Upload complete. Listing uploaded files:"
-          ./mc ls --recursive blog/$MINIO_BUCKET/$MINIO_PREFIX | head -20
-          
-      - name: Cleanup
-        if: always()
-        run: |
-          if [ ! -z "$PROXY_PID" ]; then
-            echo "Stopping proxy process (PID: $PROXY_PID)"
-            kill $PROXY_PID || true
-          fi
+          ./mc --header "CF-Access-Client-Id:${CF_ACCESS_CLIENT_ID}" \
+             --header "CF-Access-Client-Secret:${CF_ACCESS_CLIENT_SECRET}" \
+             ls --recursive blog/$MINIO_BUCKET/$MINIO_PREFIX | head -20
+    
