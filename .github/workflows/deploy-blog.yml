@@ -3,123 +3,104 @@ name: Deploy Astro Blog to MinIO
 on:
   push:
     branches: [ main ]
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: '22'
+  MC_VERSION: 'latest'
+  PROXY_PORT: '19000'
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
           cache-dependency-path: './package-lock.json'
 
       - name: Install dependencies
         run: npm ci --no-audit --prefer-offline
 
-      - name: Build Astro
+      - name: Build Astro site
         run: npm run build
 
-      # ← ここから追加 / 修正
-
-      - name: Write Access Header Proxy (Node.js, CommonJS)
-        run: |
-          cat << 'EOF' > proxy.cjs
-          const http = require('http');
-          const https = require('https');
-          const { URL } = require('url');
-
-          const target = process.env.MINIO_ENDPOINT;  // 例: https://s3.yadon3141.com
-          const id = process.env.CF_ACCESS_CLIENT_ID;
-          const secret = process.env.CF_ACCESS_CLIENT_SECRET;
-
-          if (!target || !id || !secret) {
-            console.error('Missing MINIO_ENDPOINT / CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET');
-          } else {
-            console.log('Proxy target:', target);
-          }
-
-          const server = http.createServer((clientReq, clientRes) => {
-            try {
-              const url = new URL(clientReq.url, target);
-
-              const headers = {
-                ...clientReq.headers,
-                'CF-Access-Client-Id': id,
-                'CF-Access-Client-Secret': secret,
-                host: url.host,
-              };
-
-              const options = {
-                method: clientReq.method,
-                headers,
-              };
-
-              const proxyReq = https.request(url, options, (proxyRes) => {
-                clientRes.writeHead(proxyRes.statusCode || 500, proxyRes.headers);
-                proxyRes.pipe(clientRes);
-              });
-
-              proxyReq.on('error', (err) => {
-                console.error('Proxy request error:', err);
-                if (!clientRes.headersSent) {
-                  clientRes.writeHead(502);
-                }
-                clientRes.end('Proxy error');
-              });
-
-              clientReq.pipe(proxyReq);
-            } catch (err) {
-              console.error('Proxy handler error:', err);
-              if (!clientRes.headersSent) {
-                clientRes.writeHead(500);
-              }
-              clientRes.end('Proxy handler error');
-            }
-          });
-
-          const port = 19000;
-          server.listen(port, '0.0.0.0', () => {
-            console.log(`Access header proxy running on http://0.0.0.0:${port}`);
-          });
-          EOF
-
-      - name: Start Proxy in Background
+      - name: Start CloudFlare Access proxy
         env:
-          MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT }}          # https://s3.yadon3141.com みたいな Access 保護エンドポイント
+          MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT }}
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          PROXY_PORT: ${{ env.PROXY_PORT }}
         run: |
-          node proxy.cjs &
-          # 起動待ち
-          sleep 5
+          echo "Starting CloudFlare Access proxy..."
+          node .github/scripts/cf-access-proxy.cjs &
+          PROXY_PID=$!
+          echo "PROXY_PID=$PROXY_PID" >> $GITHUB_ENV
+          
+          # Wait for proxy to be ready
+          for i in {1..30}; do
+            if curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:${{ env.PROXY_PORT }} | grep -q "[0-9]"; then
+              echo "Proxy is ready"
+              break
+            fi
+            echo "Waiting for proxy to start (attempt $i/30)..."
+            sleep 1
+          done
 
-      - name: Install mc
+
+      - name: Install MinIO Client (mc)
         run: |
+          echo "Installing MinIO Client..."
           curl -sSL https://dl.min.io/client/mc/release/linux-amd64/mc -o mc
           chmod +x mc
           ./mc --version
 
-      - name: Upload via Proxy to MinIO (with Access)
+      - name: Configure MinIO alias
         env:
           MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
           MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
+        run: |
+          echo "Configuring MinIO alias..."
+          ./mc alias set blog "http://127.0.0.1:${{ env.PROXY_PORT }}" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+          ./mc alias ls blog
+
+      - name: Ensure bucket exists
+        env:
+          MINIO_BUCKET: ${{ secrets.MINIO_BUCKET }}
+        run: |
+          echo "Ensuring bucket exists: $MINIO_BUCKET"
+          ./mc mb --ignore-existing blog/$MINIO_BUCKET || true
+
+      - name: Upload to MinIO
+        env:
           MINIO_BUCKET: ${{ secrets.MINIO_BUCKET }}
           MINIO_PREFIX: ${{ secrets.MINIO_PREFIX }}
         run: |
-          # プロキシを MinIO エンドポイントとして扱う
-          ./mc alias set blog "http://127.0.0.1:19000" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
-
-          ./mc mb --ignore-existing blog/$MINIO_BUCKET
-
+          echo "Starting upload to MinIO..."
+          echo "  Bucket: $MINIO_BUCKET"
+          echo "  Prefix: $MINIO_PREFIX"
+          
           ./mc mirror \
-            --overwrite --remove \
-            dist \
+            --overwrite \
+            --remove \
+            --exclude "*.map" \
+            dist/ \
             blog/$MINIO_BUCKET/$MINIO_PREFIX
-
-          ./mc ls blog/$MINIO_BUCKET/$MINIO_PREFIX
+          
+          echo "Upload complete. Listing uploaded files:"
+          ./mc ls --recursive blog/$MINIO_BUCKET/$MINIO_PREFIX | head -20
+          
+      - name: Cleanup
+        if: always()
+        run: |
+          if [ ! -z "$PROXY_PID" ]; then
+            echo "Stopping proxy process (PID: $PROXY_PID)"
+            kill $PROXY_PID || true
+          fi
