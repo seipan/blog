@@ -1,0 +1,62 @@
+---
+title: '新しくworker用のpcを買った'
+description: '新しくworker用のpcを買った'
+pubDate: 2025-12-01
+---
+
+import { Code } from 'astro:components';
+
+## 新しくworker用のpcを買った
+
+harborの公式イメージがarm動かなかった。bitbnamiのイメージならいける可能性があったが、bitnamiのimageを使うとhelm chartもbitnamiに寄せないといけない可能性があるなと思ったので、
+ブラックフライデーに乗じてpcを買った。スペックは以下みたいな感じ。
+
+| メーカー    | CPU           | メモリ | ディスク |
+|:----------- |:------------- |:------:|:--------:|
+| GMKtek      | Ryzen 5 3500U | 16Gb   | 512Gb    |
+
+## セットアップ
+windowsをけしてubuntuを入れた。最初はUbuntuServerでやっていたが、LANをどう頑張っても認識しないのでUbunDeskTopを入れた。
+
+あとはいつものSetup
+
+### runc
+https://github.com/opencontainers/runc
+
+```
+git clone https://github.com/opencontainers/runc
+cd runc
+
+make
+sudo make install
+```
+
+### containerd
+cgroup を systemd 管理下に置いてます。
+
+```
+wget https://github.com/containerd/containerd/releases/download/v2.1.4/containerd-2.1.4-linux-amd64.tar.gz 
+sudo tar Cxzvf /usr/local containerd-2.1.4-linux-amd64.tar.gz
+
+sudo mkdir -p /etc/containerd
+
+sudo /usr/local/bin/containerd config default | sudo tee /etc/containerd/config.toml > /dev/null
+
+sudo sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+```
+
+### cri-tools
+
+```
+VERSION="v1.34.0"
+wget https://github.com/kubernetes-sigs/cri-tools/releases/download/$VERSION/crictl-$VERSION-linux-amd64.tar.gz
+sudo tar zxvf crictl-$VERSION-linux-amd64.tar.gz -C /usr/local/bin
+rm -f crictl-$VERSION-linux-amd64.tar.gz
+```
+
+### longhorn
+longhornのテストで落ちているところを直す。
+
+```
+curl -sSfL https://raw.githubusercontent.com/longhorn/longhorn/v1.8.1/scripts/environment_check.sh | bash
+```
