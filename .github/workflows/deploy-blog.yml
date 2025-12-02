@@ -81,6 +81,28 @@ jobs:
           MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
         run: |
           echo "Configuring MinIO alias via proxy..."
+          
+          # プロキシサーバーの状態確認
+          echo "Checking proxy server status..."
+          if ps -p $PROXY_PID > /dev/null 2>&1; then
+            echo "✓ Proxy process is running (PID: $PROXY_PID)"
+          else
+            echo "✗ Proxy process is NOT running"
+            echo "Proxy log contents:"
+            cat proxy.log || echo "No log file found"
+            exit 1
+          fi
+          
+          # ポートの確認
+          echo "Checking port 8080..."
+          netstat -tuln | grep 8080 || echo "Port 8080 not found in netstat"
+          lsof -i :8080 || echo "Port 8080 not found in lsof"
+          
+          # 接続テスト
+          echo "Testing connection to proxy..."
+          curl -v http://localhost:8080 || echo "curl failed"
+          
+          # MC設定
           ./mc alias set blog http://localhost:8080 "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
           ./mc alias ls blog
 

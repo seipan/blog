@@ -57,8 +57,8 @@ const proxy = http.createServer((req, res) => {
   });
 });
 
-proxy.listen(PROXY_PORT, '127.0.0.1', () => {
-  console.log(`Proxy server is running on http://localhost:${PROXY_PORT}`);
+proxy.listen(PROXY_PORT, '0.0.0.0', () => {
+  console.log(`Proxy server is running on http://0.0.0.0:${PROXY_PORT}`);
   console.log('');
   console.log('Usage with mc:');
   console.log(`  mc alias set blog http://localhost:${PROXY_PORT} <ACCESS_KEY> <SECRET_KEY>`);
