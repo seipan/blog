@@ -44,12 +44,36 @@ jobs:
           MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT }}
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          PROXY_PORT: 8080
         run: |
           echo "Starting proxy server..."
-          node .github/scripts/proxy-server.js &
+          echo "MINIO_ENDPOINT: ${MINIO_ENDPOINT}"
+          echo "PROXY_PORT: ${PROXY_PORT}"
+          
+          # デバッグ情報
+          ls -la .github/scripts/
+          
+          # プロキシサーバーを起動
+          node .github/scripts/proxy-server.js > proxy.log 2>&1 &
           PROXY_PID=$!
           echo "PROXY_PID=$PROXY_PID" >> $GITHUB_ENV
-          sleep 2  # プロキシサーバーの起動を待つ
+          
+          # プロキシサーバーの起動を確認
+          echo "Waiting for proxy server to start..."
+          for i in {1..10}; do
+            if nc -z localhost 8080 2>/dev/null; then
+              echo "✓ Proxy server is ready on port 8080"
+              break
+            fi
+            echo "  Attempt $i/10..."
+            sleep 1
+          done
+          
+          # プロセスの確認
+          ps aux | grep node || true
+          
+          # ログの確認（最初の数行）
+          head -20 proxy.log || true
           
       - name: Configure MinIO alias via proxy
         env:
