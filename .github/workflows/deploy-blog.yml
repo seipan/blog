@@ -33,31 +33,19 @@ jobs:
 
       - name: Install MinIO Client (mc)
         run: |
-          echo "Installing MinIO Client..."
           curl -sSL https://dl.min.io/client/mc/release/linux-amd64/mc -o mc
           chmod +x mc
           ./mc --version
-
 
       - name: Start forward proxy server
         env:
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
-          echo "Starting forward proxy server..."
           node .github/scripts/forward-proxy.cjs > proxy.log 2>&1 &
-          PROXY_PID=$!
-          echo "PROXY_PID=$PROXY_PID" >> $GITHUB_ENV
-          
-          # Wait for proxy to start
-          for i in {1..10}; do
-            if nc -z localhost 8080 2>/dev/null; then
-              echo "✓ Forward proxy server is ready"
-              break
-            fi
-            sleep 1
-          done
-          
+          echo "PROXY_PID=$!" >> $GITHUB_ENV
+          timeout 10s bash -c 'until nc -z localhost 8080 2>/dev/null; do sleep 0.5; done'
+
       - name: Upload to MinIO via proxy
         env:
           MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT }}
@@ -68,36 +56,13 @@ jobs:
           HTTP_PROXY: http://localhost:8080
           HTTPS_PROXY: http://localhost:8080
         run: |
-          echo "Configuring MinIO alias..."
           ./mc alias set blog "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
-          
-          echo "Testing connection..."
-          ./mc ls blog/ || true
-          
-          echo "Ensuring bucket exists: $MINIO_BUCKET"
-          ./mc mb --ignore-existing blog/$MINIO_BUCKET || true
-          
-          echo "Starting upload to MinIO..."
-          echo "  Bucket: $MINIO_BUCKET"
-          echo "  Prefix: $MINIO_PREFIX"
-          
-          ./mc mirror \
-             --overwrite \
-             --remove \
-             --exclude "*.map" \
-             dist/ \
-             blog/$MINIO_BUCKET/$MINIO_PREFIX
-          
-          echo "Upload complete. Listing uploaded files:"
-          ./mc ls --recursive blog/$MINIO_BUCKET/$MINIO_PREFIX | head -20
+          ./mc mb --ignore-existing blog/$MINIO_BUCKET
+          ./mc mirror --overwrite --remove --exclude "*.map" dist/ blog/$MINIO_BUCKET/$MINIO_PREFIX
           
       - name: Stop forward proxy server
         if: always()
         run: |
-          if [ -n "$PROXY_PID" ]; then
-            echo "Stopping forward proxy server..."
-            kill $PROXY_PID || true
-            echo "=== Proxy Server Logs ==="
-            cat proxy.log || true
-          fi
+          [ -n "$PROXY_PID" ] && kill $PROXY_PID || true
+          [ -f proxy.log ] && echo "=== Proxy Server Logs ===" && cat proxy.log || true
     
