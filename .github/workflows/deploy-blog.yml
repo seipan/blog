@@ -39,99 +39,50 @@ jobs:
           ./mc --version
 
 
-      - name: Start proxy server
-        env:
-          MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT }}
-          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-          PROXY_PORT: 8080
-        run: |
-          echo "Starting proxy server..."
-          echo "MINIO_ENDPOINT: ${MINIO_ENDPOINT}"
-          echo "PROXY_PORT: ${PROXY_PORT}"
-          
-          # デバッグ情報
-          ls -la .github/scripts/
-          
-          # プロキシサーバーを起動
-          node .github/scripts/proxy-server.cjs > proxy.log 2>&1 &
-          PROXY_PID=$!
-          echo "PROXY_PID=$PROXY_PID" >> $GITHUB_ENV
-          
-          # プロキシサーバーの起動を確認
-          echo "Waiting for proxy server to start..."
-          for i in {1..10}; do
-            if nc -z localhost 8080 2>/dev/null; then
-              echo "✓ Proxy server is ready on port 8080"
-              break
-            fi
-            echo "  Attempt $i/10..."
-            sleep 1
-          done
-          
-          # プロセスの確認
-          ps aux | grep node || true
-          
-          # ログの確認（最初の数行）
-          head -20 proxy.log || true
-          
-      - name: Configure MinIO alias via proxy  
+      - name: Configure MinIO alias  
         env:
           MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT }}
           MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
           MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
-          MC_HOST_blog: http://${{ secrets.MINIO_ACCESS_KEY }}:${{ secrets.MINIO_SECRET_KEY }}@localhost:8080
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
-          echo "Configuring MinIO alias via proxy..."
+          echo "Configuring MinIO alias..."
+          ./mc alias set blog "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
           
-          # プロキシサーバーの状態確認
-          echo "Checking proxy server status..."
-          if ps -p $PROXY_PID > /dev/null 2>&1; then
-            echo "✓ Proxy process is running (PID: $PROXY_PID)"
-          else
-            echo "✗ Proxy process is NOT running"
-            echo "Proxy log contents:"
-            cat proxy.log || echo "No log file found"
-            exit 1
-          fi
+          # Create wrapper script for mc with headers
+          cat > mc-with-headers.sh << EOF
+          #!/bin/bash
+          ./mc --header "CF-Access-Client-Id:${CF_ACCESS_CLIENT_ID}" \\
+               --header "CF-Access-Client-Secret:${CF_ACCESS_CLIENT_SECRET}" \\
+               "\$@"
+          EOF
+          chmod +x mc-with-headers.sh
           
-          # エンドポイントの確認
-          echo "Original endpoint: ${MINIO_ENDPOINT}"
-          echo "Proxy endpoint: http://localhost:8080"
-          
-          # 環境変数方式でMCを使用
-          echo "Testing MinIO connection via environment variable..."
-          ./mc ls blog/ || true
-          
-          # 通常の方式も試す
-          echo ""
-          echo "Testing with explicit alias..."
-          ./mc alias set blogproxy http://localhost:8080 "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY" --api S3v4
-          ./mc ls blogproxy/ || true
+          echo "Testing connection..."
+          ./mc-with-headers.sh ls blog/ || true
 
       - name: Ensure bucket exists
         env:
           MINIO_BUCKET: ${{ secrets.MINIO_BUCKET }}
-          MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
-          MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
-          MC_HOST_blog: http://${{ secrets.MINIO_ACCESS_KEY }}:${{ secrets.MINIO_SECRET_KEY }}@localhost:8080
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
           echo "Ensuring bucket exists: $MINIO_BUCKET"
-          ./mc mb --ignore-existing blog/$MINIO_BUCKET || true
+          ./mc-with-headers.sh mb --ignore-existing blog/$MINIO_BUCKET || true
 
       - name: Upload to MinIO
         env:
           MINIO_BUCKET: ${{ secrets.MINIO_BUCKET }}
           MINIO_PREFIX: ${{ secrets.MINIO_PREFIX }}
-          MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
-          MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
-          MC_HOST_blog: http://${{ secrets.MINIO_ACCESS_KEY }}:${{ secrets.MINIO_SECRET_KEY }}@localhost:8080
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
           echo "Starting upload to MinIO..."
           echo "  Bucket: $MINIO_BUCKET"
           echo "  Prefix: $MINIO_PREFIX"
           
-          ./mc mirror \
+          ./mc-with-headers.sh mirror \
              --overwrite \
              --remove \
              --exclude "*.map" \
@@ -139,13 +90,5 @@ jobs:
              blog/$MINIO_BUCKET/$MINIO_PREFIX
           
           echo "Upload complete. Listing uploaded files:"
-          ./mc ls --recursive blog/$MINIO_BUCKET/$MINIO_PREFIX | head -20
-          
-      - name: Stop proxy server
-        if: always()
-        run: |
-          if [ -n "$PROXY_PID" ]; then
-            echo "Stopping proxy server..."
-            kill $PROXY_PID || true
-          fi
+          ./mc-with-headers.sh ls --recursive blog/$MINIO_BUCKET/$MINIO_PREFIX | head -20
     
