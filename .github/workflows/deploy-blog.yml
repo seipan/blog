@@ -40,5 +40,5 @@ jobs:
           MINIO_PREFIX: ${{ secrets.MINIO_PREFIX }}
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-        run: node .github/scripts/deploy-to-minio.js
+        run: node .github/scripts/deploy-to-minio.cjs
     
