@@ -1,77 +1,26 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-echo "Testing forward proxy setup for MinIO with Cloudflare Access"
-echo "=============================================="
+[ -f .env ] && export $(grep -v '^#' .env | xargs)
 
-# Load environment variables
-if [ -f .env ]; then
-  export $(cat .env | grep -v '^#' | xargs)
-fi
-
-# Check required environment variables
-required_vars=(
-  "MINIO_ENDPOINT"
-  "MINIO_ACCESS_KEY"
-  "MINIO_SECRET_KEY"
-  "MINIO_BUCKET"
-  "CF_ACCESS_CLIENT_ID"
-  "CF_ACCESS_CLIENT_SECRET"
-)
-
+required_vars=("MINIO_ENDPOINT" "MINIO_ACCESS_KEY" "MINIO_SECRET_KEY" "CF_ACCESS_CLIENT_ID" "CF_ACCESS_CLIENT_SECRET")
 for var in "${required_vars[@]}"; do
-  if [ -z "${!var}" ]; then
-    echo "Error: $var is not set"
-    exit 1
-  fi
+  [ -z "${!var}" ] && { echo "Error: $var is not set"; exit 1; }
 done
 
-# Start the forward proxy
-echo "Starting forward proxy server..."
+# Start proxy
 node .github/scripts/forward-proxy.cjs &
 PROXY_PID=$!
+trap "kill $PROXY_PID 2>/dev/null || true" EXIT
 
-# Wait for proxy to be ready
-echo "Waiting for proxy to be ready..."
-for i in {1..10}; do
-  if nc -z localhost 8080 2>/dev/null; then
-    echo "✓ Forward proxy server is ready"
-    break
-  fi
-  sleep 1
-done
+# Wait for proxy
+timeout 10s bash -c 'until nc -z localhost 8080 2>/dev/null; do sleep 0.5; done'
 
-# Set proxy environment variables
-export HTTP_PROXY=http://localhost:8080
-export HTTPS_PROXY=http://localhost:8080
-
-# Test MinIO connection
-echo ""
-echo "Testing MinIO connection through proxy..."
-echo "MinIO endpoint: $MINIO_ENDPOINT"
-
-# Download mc if not present
-if [ ! -f ./mc ]; then
-  echo "Downloading MinIO Client..."
-  curl -sSL https://dl.min.io/client/mc/release/linux-amd64/mc -o mc
-  chmod +x mc
-fi
-
-# Configure mc alias
-echo ""
-echo "Configuring MinIO alias..."
-./mc alias set testblog "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+# Download mc if needed
+[ ! -f ./mc ] && curl -sSL https://dl.min.io/client/mc/release/linux-amd64/mc -o mc && chmod +x mc
 
 # Test connection
-echo ""
-echo "Testing connection..."
-./mc ls testblog/ || echo "Connection test failed"
-
-# Clean up
-echo ""
-echo "Cleaning up..."
-kill $PROXY_PID 2>/dev/null || true
-unset HTTP_PROXY HTTPS_PROXY
-
-echo ""
-echo "Test complete!"
+export HTTP_PROXY=http://localhost:8080
+export HTTPS_PROXY=http://localhost:8080
+./mc alias set test "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+./mc ls test/ || echo "Connection test failed"
