@@ -31,38 +31,14 @@ jobs:
       - name: Build Astro site
         run: npm run build
 
-      - name: Install MinIO Client (mc)
-        run: |
-          curl -sSL https://dl.min.io/client/mc/release/linux-amd64/mc -o mc
-          chmod +x mc
-          ./mc --version
-
-      - name: Start forward proxy server
-        env:
-          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-        run: |
-          node .github/scripts/forward-proxy.cjs > proxy.log 2>&1 &
-          echo "PROXY_PID=$!" >> $GITHUB_ENV
-          timeout 10s bash -c 'until nc -z localhost 8080 2>/dev/null; do sleep 0.5; done'
-
-      - name: Upload to MinIO via proxy
+      - name: Deploy to MinIO
         env:
           MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT }}
           MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
           MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
           MINIO_BUCKET: ${{ secrets.MINIO_BUCKET }}
           MINIO_PREFIX: ${{ secrets.MINIO_PREFIX }}
-          HTTP_PROXY: http://localhost:8080
-          HTTPS_PROXY: http://localhost:8080
-        run: |
-          ./mc alias set blog "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
-          ./mc mb --ignore-existing blog/$MINIO_BUCKET
-          ./mc mirror --overwrite --remove --exclude "*.map" dist/ blog/$MINIO_BUCKET/$MINIO_PREFIX
-          
-      - name: Stop forward proxy server
-        if: always()
-        run: |
-          [ -n "$PROXY_PID" ] && kill $PROXY_PID || true
-          [ -f proxy.log ] && echo "=== Proxy Server Logs ===" && cat proxy.log || true
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: node .github/scripts/deploy-to-minio.js
     
