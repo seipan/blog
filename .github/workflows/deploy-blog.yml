@@ -39,21 +39,20 @@ jobs:
           ./mc --version
 
 
-      - name: Start proxy server
+      - name: Start forward proxy server
         env:
-          MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT }}
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
-          echo "Starting proxy server..."
-          node .github/scripts/proxy-server.cjs > proxy.log 2>&1 &
+          echo "Starting forward proxy server..."
+          node .github/scripts/forward-proxy.cjs > proxy.log 2>&1 &
           PROXY_PID=$!
           echo "PROXY_PID=$PROXY_PID" >> $GITHUB_ENV
           
           # Wait for proxy to start
           for i in {1..10}; do
             if nc -z localhost 8080 2>/dev/null; then
-              echo "✓ Proxy server is ready"
+              echo "✓ Forward proxy server is ready"
               break
             fi
             sleep 1
@@ -66,12 +65,11 @@ jobs:
           MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
           MINIO_BUCKET: ${{ secrets.MINIO_BUCKET }}
           MINIO_PREFIX: ${{ secrets.MINIO_PREFIX }}
+          HTTP_PROXY: http://localhost:8080
+          HTTPS_PROXY: http://localhost:8080
         run: |
-          # Parse original endpoint to get the path
-          ENDPOINT_PATH=$(echo "$MINIO_ENDPOINT" | sed -E 's|https?://[^/]+||')
-          
-          echo "Configuring MinIO alias for proxy..."
-          ./mc alias set blog "http://localhost:8080${ENDPOINT_PATH}" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+          echo "Configuring MinIO alias..."
+          ./mc alias set blog "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
           
           echo "Testing connection..."
           ./mc ls blog/ || true
@@ -93,12 +91,13 @@ jobs:
           echo "Upload complete. Listing uploaded files:"
           ./mc ls --recursive blog/$MINIO_BUCKET/$MINIO_PREFIX | head -20
           
-      - name: Stop proxy server
+      - name: Stop forward proxy server
         if: always()
         run: |
           if [ -n "$PROXY_PID" ]; then
-            echo "Stopping proxy server..."
+            echo "Stopping forward proxy server..."
             kill $PROXY_PID || true
+            echo "=== Proxy Server Logs ==="
             cat proxy.log || true
           fi
     
