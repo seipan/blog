@@ -2,7 +2,7 @@
 
 const http = require('http');
 const https = require('https');
-const url = require('url');
+const { URL } = require('url');
 const { spawn } = require('child_process');
 
 // 環境変数から設定を取得

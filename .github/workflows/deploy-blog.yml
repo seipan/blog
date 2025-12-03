@@ -54,7 +54,7 @@ jobs:
           ls -la .github/scripts/
           
           # プロキシサーバーを起動
-          node .github/scripts/proxy-server.js > proxy.log 2>&1 &
+          node .github/scripts/proxy-server.cjs > proxy.log 2>&1 &
           PROXY_PID=$!
           echo "PROXY_PID=$PROXY_PID" >> $GITHUB_ENV
           

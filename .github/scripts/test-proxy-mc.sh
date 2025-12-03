@@ -21,7 +21,7 @@ echo ""
 
 # プロキシサーバーの起動
 echo "Starting proxy server..."
-node .github/scripts/proxy-server.js &
+node .github/scripts/proxy-server.cjs &
 PROXY_PID=$!
 
 # プロキシサーバーの起動を待つ
