@@ -75,10 +75,12 @@ jobs:
           # ログの確認（最初の数行）
           head -20 proxy.log || true
           
-      - name: Configure MinIO alias via proxy
+      - name: Configure MinIO alias via proxy  
         env:
+          MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT }}
           MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
           MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
+          MC_HOST_blog: http://${{ secrets.MINIO_ACCESS_KEY }}:${{ secrets.MINIO_SECRET_KEY }}@localhost:8080
         run: |
           echo "Configuring MinIO alias via proxy..."
           
@@ -93,22 +95,26 @@ jobs:
             exit 1
           fi
           
-          # ポートの確認
-          echo "Checking port 8080..."
-          netstat -tuln | grep 8080 || echo "Port 8080 not found in netstat"
-          lsof -i :8080 || echo "Port 8080 not found in lsof"
+          # エンドポイントの確認
+          echo "Original endpoint: ${MINIO_ENDPOINT}"
+          echo "Proxy endpoint: http://localhost:8080"
           
-          # 接続テスト
-          echo "Testing connection to proxy..."
-          curl -v http://localhost:8080 || echo "curl failed"
+          # 環境変数方式でMCを使用
+          echo "Testing MinIO connection via environment variable..."
+          ./mc ls blog/ || true
           
-          # MC設定
-          ./mc alias set blog http://localhost:8080 "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
-          ./mc alias ls blog
+          # 通常の方式も試す
+          echo ""
+          echo "Testing with explicit alias..."
+          ./mc alias set blogproxy http://localhost:8080 "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY" --api S3v4
+          ./mc ls blogproxy/ || true
 
       - name: Ensure bucket exists
         env:
           MINIO_BUCKET: ${{ secrets.MINIO_BUCKET }}
+          MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
+          MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
+          MC_HOST_blog: http://${{ secrets.MINIO_ACCESS_KEY }}:${{ secrets.MINIO_SECRET_KEY }}@localhost:8080
         run: |
           echo "Ensuring bucket exists: $MINIO_BUCKET"
           ./mc mb --ignore-existing blog/$MINIO_BUCKET || true
@@ -117,6 +123,9 @@ jobs:
         env:
           MINIO_BUCKET: ${{ secrets.MINIO_BUCKET }}
           MINIO_PREFIX: ${{ secrets.MINIO_PREFIX }}
+          MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
+          MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
+          MC_HOST_blog: http://${{ secrets.MINIO_ACCESS_KEY }}:${{ secrets.MINIO_SECRET_KEY }}@localhost:8080
         run: |
           echo "Starting upload to MinIO..."
           echo "  Bucket: $MINIO_BUCKET"

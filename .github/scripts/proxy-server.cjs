@@ -21,14 +21,21 @@ console.log(`Target MinIO: ${MINIO_ENDPOINT}`);
 
 const proxy = http.createServer((req, res) => {
   console.log(`Received request: ${req.method} ${req.url}`);
+  console.log(`Headers: ${JSON.stringify(req.headers)}`);
 
   // Cloudflare Accessヘッダーを追加
+  // Authorization ヘッダーを保持し、hostヘッダーを正しく設定
   const headers = {
     ...req.headers,
     'CF-Access-Client-Id': CF_ACCESS_CLIENT_ID,
     'CF-Access-Client-Secret': CF_ACCESS_CLIENT_SECRET,
-    host: targetUrl.hostname
+    'host': targetUrl.hostname,
+    'x-forwarded-host': req.headers.host,
+    'x-forwarded-proto': isHttps ? 'https' : 'http'
   };
+  
+  // 不要なヘッダーを削除
+  delete headers['accept-encoding']; // 圧縮の問題を避ける
 
   const options = {
     hostname: targetUrl.hostname,
@@ -44,7 +51,17 @@ const proxy = http.createServer((req, res) => {
   const protocol = isHttps ? https : http;
   const proxyReq = protocol.request(options, (proxyRes) => {
     console.log(`Response status: ${proxyRes.statusCode}`);
-    res.writeHead(proxyRes.statusCode, proxyRes.headers);
+    console.log(`Response headers: ${JSON.stringify(proxyRes.headers)}`);
+    
+    // レスポンスヘッダーの調整
+    const responseHeaders = { ...proxyRes.headers };
+    
+    // Set-Cookieヘッダーの処理（CF_Authorizationクッキーなど）
+    if (responseHeaders['set-cookie']) {
+      console.log('Set-Cookie headers detected:', responseHeaders['set-cookie']);
+    }
+    
+    res.writeHead(proxyRes.statusCode, responseHeaders);
     proxyRes.pipe(res, { end: true });
   });
 
