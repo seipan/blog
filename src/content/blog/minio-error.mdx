@@ -1,0 +1,76 @@
+---
+title: 'MinioでWaiting for MinIO to be readyエラー'
+description: 'MinioでWaiting for MinIO to be readyエラーの対処法'
+pubDate: 2026-01-01
+---
+
+## 始まり
+MinioをKubernetes上で運用しているとArgocd上でProgressingのまま進まなくなっていた。
+
+```
+WaitingMinIOIsHealthy Waiting for MinIO to be ready 38303 2d ago Last Saturday at 7:03 PM 3m ago Today at 12:43 AM
+```
+
+minioのPodのログを確認すると以下のようなエラーが出ていた。
+
+```
+Error: Write quorum could not be established on pool: 0, set: 0, expected write quorum: 3, drives-online: 2 (*errors.errorString)
+```
+書き込みには3台のドライブが必要だが、2台しかオンラインになっていないというエラー。
+
+しかし、PVCの状態を確認すると全てBoundになっている。
+```
+❯ kubectl get pvc -n minio
+NAME                     STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+data0-myminio-pool-0-0   Bound    pvc-97a7fff5-954c-4099-82be-6bd6b8141ede   10Gi       RWO            longhorn       <unset>                 46d
+data0-myminio-pool-0-1   Bound    pvc-509cf6ae-dd62-48c7-8943-9fca50cc88d7   10Gi       RWO            longhorn       <unset>                 46d
+data0-myminio-pool-0-2   Bound    pvc-3004a824-d1c9-4e07-b041-d5cfa5b2c132   10Gi       RWO            longhorn       <unset>                 46d
+data0-myminio-pool-0-3   Bound    pvc-0ad1b2d0-733f-43d3-b440-feef6b10422d   10Gi       RWO            longhorn       <unset>                 46d
+```
+
+minioのpodの状態を見ると, 4台正常に動作しているが各podで同様のエラーが出ている。
+```
+🌱 🌐 k8s-master in ~ x86_64
+❯ kubectl get pod -o wide -n minio
+NAME               READY   STATUS             RESTARTS          AGE    IP           NODE     NOMINATED NODE   READINESS GATES
+myminio-pool-0-0   2/2     Running            0                 30d    10.0.1.222   newpi2   <none>           <none>
+myminio-pool-0-1   2/2     Running            0                 2d5h   10.0.2.17    newpi1   <none>           <none>
+myminio-pool-0-2   2/2     Running            0                 45h    10.0.3.179   ana      <none>           <none>
+myminio-pool-0-3   2/2     Running            0                 30d    10.0.1.132   newpi2   <none>           <none>
+```
+
+```
+Error: Write quorum could not be established on pool: 0, set: 0, expected write quorum: 3, drives-online: 2 (*errors.errorString)
+```
+
+元々4つのPodが立っていて、2しかOnlineとなっていないので2台乗っているnewpi2のノード何か起こっている可能性が高い。
+
+newpi2でdmesgを確認すると以下のようなアンマウント処理が行われたログが出ていた。
+```
+@newpi2:~$ sudo dmesg -T | egrep -i "i/o|blk|nvme|usb|reset|timeout|error|read-only|ext4|xfs|hung" | tail -n 200
+[Mon Dec 29 15:57:01 2025] EXT4-fs (sdh): unmounting filesystem 8bf510b7-5dc4-4751-8b9e-a92dc68c00db.
+[Mon Dec 29 15:57:01 2025] EXT4-fs (sde): unmounting filesystem c742ccdb-16c1-4db7-af80-13db6349ebdd
+```
+
+さらにvcgencmdでスロットリングの状態を確認すると以下のように電圧低下が発生していることがわかった。
+```
+@newpi2:~$ sudo vcgencmd get_throttled
+throttled=0x50005
+```
+ref: https://raspberrypi.mongonta.com/underpower/
+
+
+## 対処
+
+newpi2から追い出して、再スケジュールすると治った。
+
+```
+kubectl cordon newpi2
+kubectl delete pod -n minio myminio-pool-0-0 myminio-pool-0-3
+```
+
+## 備忘録
+
+おそらくnewpi2の電源が不安定なので電圧が下がってしまって、一時てきにディスク I/O エラーが発生してアンマウントされてしまったのだと思う。
+それによって一瞬書き込みができなくなったが、longhorn側で復帰している。が、minio側では2台しかオンラインになっていないと認識してしまい、書き込みクォーラムが確立できない状態になってしまった。
+newpi1も同じ環境なのでラズベリーパイの電源周りを見直さないといけない。
